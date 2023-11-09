@@ -10,6 +10,9 @@ from colormap import colormap
 from copy import deepcopy
 from PIL import Image
 import os
+from glob import glob 
+from natsort import natsorted 
+import json
 
 RENDER_MODE = 'color'  # 'color', 'depth' or 'centers'
 # RENDER_MODE = 'depth'  # 'color', 'depth' or 'centers'
@@ -49,8 +52,12 @@ def init_camera(y_angle=0., center_dist=2.4, cam_height=1.3, f_ratio=0.82):
 
 
 def load_scene_data(seq, exp, seg_as_col=False):
-    params = dict(np.load(f"./output/{exp}/{seq}/params.npz"))
-    params = {k: torch.tensor(v).cuda().float() for k, v in params.items()}
+    # params = dict(np.load(f"./output/{exp}/{seq}/params.npz"))
+    param_fnams = glob(f"./output/{exp}/{seq}/params_*.npz")
+    param_fnams = natsorted(param_fnams)
+    print(f"Loading {param_fnams[-1]}")
+    params = dict(np.load(param_fnams[-1]))
+    params = {k: torch.tensor(v).cuda().float() for k, v in params.items()} 
     is_fg = params['seg_colors'][:, 0] > 0.5
     scene_data = []
     for t in range(len(params['means3D'])):
@@ -141,89 +148,21 @@ def rgbd2pcd(im, depth, w2c, k, show_depth=False, project_to_cam_w_scale=None):
     cols = o3d.utility.Vector3dVector(cols.contiguous().double().cpu().numpy())
     return pts, cols
 
+def load_test_camera(fname="data/corl_1_dense_rgb/val_meta.json"):
+    with open(fname, 'r') as f:
+        meta = json.load(f)
+    w2cs = np.array(meta['w2c'])
+    ks = np.array(meta['k'])
+    return w2cs, ks
+
 def visualize(seq, exp):
     scene_data, is_fg = load_scene_data(seq, exp) 
     
     # w2c, k = init_camera()
-    # c2w = np.array([
-    #                 [
-    #                     -0.963964581489563,
-    #                     -0.2611401677131653,
-    #                     0.0507759265601635,
-    #                     0.2046843022108078
-    #                 ],
-    #                 [
-    #                     0.26603081822395325,
-    #                     -0.9462433457374573,
-    #                     0.18398693203926086,
-    #                     0.7416750192642212
-    #                 ],
-    #                 [
-    #                     7.450580596923828e-09,
-    #                     0.1908649355173111,
-    #                     0.9816163182258606,
-    #                     3.957021951675415
-    #                 ],
-    #                 [
-    #                     0.0,
-    #                     0.0,
-    #                     0.0,
-    #                     1.0
-    #                 ]
-    #             ]
-    #             )
-    # P = c2w
-    # R = P[:3,:3]
-    # t = P[:3,3]
-    # P_inv = np.eye((4))
-    # P_inv[:3,:3] = R.T
-    # P_inv[:3,3] = -R.T@t
-    # P_inv[2,:] *= -1
-    # P_inv[1,:] *= -1
-    # w2c = P_inv
-    w2c = np.array([
-                [
-                    0.4429635272769875,
-                    -0.8965395271136246,
-                    -2.804976617903648e-09,
-                    1.0128610361849655e-09
-                ],
-                [
-                    -0.3137771761772483,
-                    -0.15503148248946505,
-                    -0.9367545427603202,
-                    4.430494112538668e-08
-                ],
-                [
-                    0.8398376456961315,
-                    0.4149482025715743,
-                    -0.3499870237328287,
-                    4.031129313218616
-                ],
-                [
-                    0.0,
-                    0.0,
-                    0.0,
-                    1.0
-                ]
-            ])
-    k = np.array([
-                [
-                    1111.1110311937682,
-                    0.0,
-                    400.0
-                ],
-                [
-                    0.0,
-                    1111.1110311937682,
-                    400.0
-                ],
-                [
-                    0.0,
-                    0.0,
-                    1.0
-                ]
-            ])
+    # load test time camera:
+    w2cs, ks = load_test_camera(fname="data/corl_1_dense_rgb/val_meta.json")
+    w2c = w2cs[0][0]
+    k = ks[0][0] 
     im, depth = render(w2c, k, scene_data[0])
     init_pts, init_cols = rgbd2pcd(im, depth, w2c, k, show_depth=(RENDER_MODE == 'depth'))
     # save image
@@ -232,7 +171,7 @@ def visualize(seq, exp):
             im.cpu().permute(1, 2, 0) * 255, dtype=np.uint8
             )
             ).save(f"./output/{exp}/{seq}/init.png")
-    
+    # breakpoint()
     o3d.visualization.webrtc_server.enable_webrtc()
     vis = o3d.visualization.Visualizer()
     vis.create_window(width=int(w * view_scale), height=int(h * view_scale), visible=True)
@@ -332,7 +271,40 @@ def visualize(seq, exp):
     del vis
     del render_options
 
-def plot_traj(seq, exp, totrack_pts=None):
+def render_video(seq, exp, meta_fname="data/corl_1_dense_rgb/val_meta.json", use_cameras=20):
+    import imageio
+    scene_data, is_fg = load_scene_data(seq, exp) 
+    w2cs, ks = load_test_camera(fname=meta_fname) # shape tstep, n_cameras, 4, 4
+    all_renders = []
+    n_frames = min(w2cs.shape[0], len(scene_data))
+    n_cameras = w2cs.shape[1]
+    cam_idxs = np.random.choice(n_cameras, use_cameras, replace=False)
+    for cam in cam_idxs:
+        curr_frame = []
+        for t in range(n_frames):
+            w2c = w2cs[t][cam]
+            k = ks[t][cam] 
+            im, depth = render(w2c, k, scene_data[t])
+            rgb = im.cpu().permute(1, 2, 0).numpy()
+            # breakpoint()
+            rgb =  (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
+            curr_frame.append(rgb)
+        all_renders.extend(
+            curr_frame
+        )
+    
+    # save video
+    if 'train' in meta_fname:
+        video_fname = f"./output/{exp}/{seq}/train_cameras.mp4"
+    else:
+        video_fname = f"./output/{exp}/{seq}/test_cameras.mp4"
+    imageio.mimwrite(video_fname, all_renders, fps=20, quality=8)
+    print(f"Saved video to {video_fname}")
+    return 
+
+
+
+def plot_traj(seq, exp, totrack_pts=None, gt_traj=None):
     scene_data, is_fg = load_scene_data(seq, exp) 
     linesets = calculate_trajectories(scene_data, is_fg)
     # plot the linesets in 3D
@@ -359,7 +331,7 @@ def plot_traj(seq, exp, totrack_pts=None):
             closest = np.argmin(dists)
             # breakpoint()
             closest_dist = dists[closest]
-            print("closest_dist:", closest_dist)
+            # print("closest_dist:", closest_dist)
             color = colors[i]
             for j, lineset in enumerate(linesets):
                 points = np.array(lineset.points)
@@ -367,30 +339,42 @@ def plot_traj(seq, exp, totrack_pts=None):
                 start, end = lines[closest]
                 ax.plot(points[[start, end], 0], points[[start, end], 1], points[[start, end], 2], color=color, alpha=0.9)
                 # scatter the start and end points
-                if j == 0:
-                    ax.scatter(
-                        points[start, 0], points[start, 1], points[start, 2], color='red', label="start")
-                if j == len(linesets)-1:
-                    ax.scatter(
-                        points[end, 0], points[end, 1], points[end, 2], color='blue', label="end")
-    # set xyz limits
-    ax.set_xlim(-1, 1)
-    ax.set_ylim(-1, 1)
-    ax.set_zlim(-1, 1)
-    # ax.legend()
+                # if j == 0:
+                #     ax.scatter(
+                #         points[start, 0], points[start, 1], points[start, 2], color='red', label="start")
+                # if j == len(linesets)-1:
+                #     ax.scatter(
+                #         points[end, 0], points[end, 1], points[end, 2], color='blue', label="end")
+    plt.tight_layout()
     fname = f"traj_track_{len(totrack_pts)}pts.png" if totrack_pts is not None else f"traj_track_allpts.png"
-    plt.savefig(fname, dpi=300)
+    plt.savefig(fname, dpi=400)
+
+    if gt_traj is not None:
+        ax = fig.add_subplot(111, projection='3d')
+        num_pts = gt_traj.shape[1]
+        for i, pt in enumerate(gt_traj[0]):
+            color = colormap[i % len(colormap)]
+            traj = gt_traj[:,i] # (time, 3)
+            ax.plot(traj[:,0], traj[:,1], traj[:,2], color=color, alpha=0.9)
+        fname = f"traj_gt_{len(totrack_pts)}pts.png" 
+        plt.savefig(fname, dpi=400)
+
     breakpoint()
 if __name__ == "__main__":
     # exp_name = "pretrained"
     # for sequence in ["basketball", "boxes", "football", "juggle", "softball", "tennis"]:
     #     visualize(sequence, exp_name)
-    # visualize('scene_a', "exp1")
+    # visualize('corl_1_dense_rgb', "subsample_100k")
+    render_video('corl_1_dense_rgb', "subsample_10k_moreitr", meta_fname="data/corl_1_dense_rgb/val_meta.json",)
+    exit()
     traj_length = 1
     traj_frac = 100 #4000
-    totrack_pts = np.array([
-        [0, 0, 0],
-        [0.5, 0.5, 0.5],
-        [-0.5, -0.5, -0.5],
-    ])
-    plot_traj('scene_a', "exp1", totrack_pts)
+    load_gt_fname = "corl_scene1.npz"
+    num_pts = 300
+    
+    gt_traj = np.load(load_gt_fname)['traj'] # ~20k points, shape (t, N, 3)
+    idxs = np.random.choice(gt_traj.shape[1], num_pts, replace=False)
+    totrack_pts = gt_traj[0][idxs] # (N, 3)
+    # gt_traj = gt_traj[:, idxs] # (t, N, 3) 
+    gt_traj = None
+    plot_traj('corl_1_dense_rgb', "subsample_100k", totrack_pts, gt_traj)

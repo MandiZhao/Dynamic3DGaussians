@@ -10,7 +10,7 @@ from diff_gaussian_rasterization import GaussianRasterizer as Renderer
 from helpers import setup_camera, l1_loss_v1, l1_loss_v2, weighted_l2_loss_v1, weighted_l2_loss_v2, quat_mult, \
     o3d_knn, params2rendervar, params2cpu, save_params
 from external import calc_ssim, calc_psnr, build_rotation, densify, update_params_and_optimizer
-
+import pickle
 
 def get_dataset(t, md, seq):
     dataset = []
@@ -19,6 +19,9 @@ def get_dataset(t, md, seq):
         cam = setup_camera(w, h, k, w2c, near=1.0, far=100)
         fn = md['fn'][t][c]
         im = np.array(copy.deepcopy(Image.open(f"./data/{seq}/ims/{fn}")))
+        # NEW: if img has alpha channel, remove it
+        if im.shape[-1] == 4:
+            im = im[:, :, :3]
         im = torch.tensor(im).float().cuda().permute(2, 0, 1) / 255
         seg = np.array(copy.deepcopy(Image.open(f"./data/{seq}/seg/{fn.replace('.jpg', '.png')}"))).astype(np.float32)
         seg = torch.tensor(seg).float().cuda()
@@ -34,10 +37,20 @@ def get_batch(todo_dataset, dataset):
     return curr_data
 
 
-def initialize_params(seq, md):
-    init_pt_cld = np.load(f"./data/{seq}/init_pt_cld.npz")["data"]
+def initialize_params(seq, md, subsample=-1):
+    init_pt_cld = np.load(f"./data/{seq}/init_pt_cld.npz")
+    if 'data' in init_pt_cld:
+        init_pt_cld = init_pt_cld["data"]
+    else:
+        key = list(init_pt_cld.keys())[0]
+        init_pt_cld = init_pt_cld[key]
+    if subsample > 0:
+        idxs = np.random.choice(len(init_pt_cld), subsample, replace=(len(init_pt_cld) < subsample))
+        print(f"Subsampling {len(init_pt_cld)} points to {subsample}")
+        init_pt_cld = init_pt_cld[idxs]
     seg = init_pt_cld[:, 6]
-    max_cams = 50
+    # max_cams = 50
+    max_cams = 100
     sq_dist, _ = o3d_knn(init_pt_cld[:, :3], 3)
     mean3_sq_dist = sq_dist.mean(-1).clip(min=0.0000001)
     params = {
@@ -76,7 +89,7 @@ def initialize_optimizer(params, variables):
     return torch.optim.Adam(param_groups, lr=0.0, eps=1e-15)
 
 
-def get_loss(params, curr_data, variables, is_initial_timestep):
+def get_loss(params, curr_data, variables, is_initial_timestep, return_losses=False):
     losses = {}
 
     rendervar = params2rendervar(params)
@@ -125,6 +138,9 @@ def get_loss(params, curr_data, variables, is_initial_timestep):
     seen = radius > 0
     variables['max_2D_radius'][seen] = torch.max(radius[seen], variables['max_2D_radius'][seen])
     variables['seen'] = seen
+
+    if return_losses:
+        return loss, variables, losses
     return loss, variables
 
 
@@ -171,6 +187,7 @@ def initialize_post_first_timestep(params, variables, optimizer, num_knn=20):
     for param_group in optimizer.param_groups:
         if param_group["name"] in params_to_fix:
             param_group['lr'] = 0.0
+    print(f"post first timestep: foreground: {init_fg_pts.shape[0]}, background: {init_bg_pts.shape[0]}")
     return variables
 
 
@@ -182,6 +199,8 @@ def report_progress(params, data, i, progress_bar, every_i=100):
         psnr = calc_psnr(im, data['im']).mean()
         progress_bar.set_postfix({"train img 0 PSNR": f"{psnr:.{7}f}"})
         progress_bar.update(every_i)
+        return psnr 
+    return None
 
 
 def train(seq, exp):
@@ -190,7 +209,7 @@ def train(seq, exp):
         return
     md = json.load(open(f"./data/{seq}/train_meta.json", 'r'))  # metadata
     num_timesteps = len(md['fn'])
-    params, variables = initialize_params(seq, md)
+    params, variables = initialize_params(seq, md, subsample=5000)
     optimizer = initialize_optimizer(params, variables)
     output_params = []
     for t in range(num_timesteps):
@@ -199,27 +218,40 @@ def train(seq, exp):
         is_initial_timestep = (t == 0)
         if not is_initial_timestep:
             params, variables = initialize_per_timestep(params, variables, optimizer)
-        num_iter_per_timestep = 10000 if is_initial_timestep else 2000
+        num_iter_per_timestep = 10000 if is_initial_timestep else 6000
+        # if t in [1, 2]:
+        #     num_iter_per_timestep = 8000 
         progress_bar = tqdm(range(num_iter_per_timestep), desc=f"timestep {t}")
+        psnrs = []
         for i in range(num_iter_per_timestep):
             curr_data = get_batch(todo_dataset, dataset)
-            loss, variables = get_loss(params, curr_data, variables, is_initial_timestep)
+            loss, variables, losses = get_loss(params, curr_data, variables, is_initial_timestep, return_losses=True)
             loss.backward()
             with torch.no_grad():
-                report_progress(params, dataset[0], i, progress_bar)
+                maybe_psnr = report_progress(params, dataset[0], i, progress_bar)
                 if is_initial_timestep:
                     params, variables = densify(params, variables, optimizer, i)
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
+            if maybe_psnr is not None:
+                psnrs.append(maybe_psnr.detach().cpu().numpy())
         progress_bar.close()
         output_params.append(params2cpu(params, is_initial_timestep))
         if is_initial_timestep:
             variables = initialize_post_first_timestep(params, variables, optimizer)
-    save_params(output_params, seq, exp)
+        save_params(output_params, seq, exp, step=t)
+        # save loss:
+        losses = {k: v.detach().cpu().numpy() for k, v in losses.items()}
+        losses['psnr'] = np.array(psnrs)
+        with open(f"./output/{exp}/{seq}/losses_step{t}.pkl", 'wb') as f:
+            pickle.dump(losses, f)
+            
+
+    save_params(output_params, seq, exp, step=num_timesteps)
 
 
 if __name__ == "__main__":
-    exp_name = "exp1"
-    for sequence in ["basketball", "boxes", "football", "juggle", "softball", "tennis"]:
+    exp_name = "subsample_5k_densify"
+    for sequence in ["corl_1_dense_rgb"]: #["basketball", "boxes", "football", "juggle", "softball", "tennis"]:
         train(sequence, exp_name)
         torch.cuda.empty_cache()

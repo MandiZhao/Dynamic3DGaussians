@@ -26,8 +26,9 @@ def setup_camera(w, h, k, w2c, near=0.01, far=100):
         projmatrix=full_proj,
         sh_degree=0,
         campos=cam_center,
-        prefiltered=False
-    )
+        prefiltered=False,
+        debug=False,
+        )
     return cam
 
 
@@ -91,12 +92,15 @@ def params2cpu(params, is_initial_timestep):
     return res
 
 
-def save_params(output_params, seq, exp):
+def save_params(output_params, seq, exp, step=0):
     to_save = {}
     for k in output_params[0].keys():
-        if k in output_params[1].keys():
-            to_save[k] = np.stack([params[k] for params in output_params])
+        if len(output_params) > 1:
+            if k in output_params[1].keys():
+                to_save[k] = np.stack([params[k] for params in output_params])
+            else:
+                to_save[k] = output_params[0][k]
         else:
             to_save[k] = output_params[0][k]
     os.makedirs(f"./output/{exp}/{seq}", exist_ok=True)
-    np.savez(f"./output/{exp}/{seq}/params", **to_save)
+    np.savez(f"./output/{exp}/{seq}/params_step{step}", **to_save)
