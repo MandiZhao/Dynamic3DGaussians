@@ -1,3 +1,61 @@
+## Notes from Mandi
+
+### Installation 
+The same setup from 4DGS should work. I used the Docker Image Bart shared, created a conda env. inside based on instructions from 4DGS codebase, then pip-installed additional packages: 
+`pip install natsort open3d imageio einops`
+
+### Train and Eval
+Slighly modified from original code to support adding and editing a few arguments via command-line. 
+
+- Training:
+Remember to set `DATA_DIR` in `train.py` to your desired output dir
+```
+python train.py --exp_name 50k_full --subsample 50000 --time_interval 1 # this uses the full traj.
+python train.py --exp_name 50k_t5 --subsample 50000 --time_interval 5     # this uses only traj[::5]
+```
+Params and loss information should be saved after every timestep, in folder `$DATA_DIR/output/$exp_name/`
+
+- Generate Video from Test Cameras
+```
+python visualze.py --exp_name 50k_full --render 
+```
+videos should also be saved in the same output folder `$DATA_DIR/output/$exp_name/`
+
+- Generate tracking trajectory
+See `track.py`. Set the following variables in the script:
+1. `load_gt_fname`: the desired location of the GT traj. file.
+2. `exp_name`: desired run name, same as used in training. 
+3. `num_pts`: desired number of points sub-sampled from the GT trajecotries. 
+
+Note that the `np.savez` lines might need change so the `npz` files get saved to a different file structure.
+
+### Dataset convertions: between DNerf and Pano. format
+
+First, DynamicGaussians requires initial pointcloud, which the Blender scenes don't have. Use `gen_pcd.py` to generate this pointcloud and save it to "init_pt_cld.npz". 
+
+
+Next, see `convert_data.py`. It contains both options:
+1. convert dnerf format into pano. format (rember to run `gen_pcd.py` first, so you can use the data for training DynamicGS)
+```
+inp_folder = "../corl_1_dense_rgb"
+out_folder = "data/scene_a" 
+os.makedirs(out_folder, exist_ok=True)
+cam_id_offset = 0
+for folder in ["train", "val"]:
+    cam_id_offset = dnerf_to_dynaGS(inp_folder, out_folder, folder, cam_id_offset=cam_id_offset)
+    print(f"cam_id_offset: {cam_id_offset}")
+```   
+
+2. convert pano. to dnerf format (so you can use it for training 4DGS)
+```
+inp_folder = "data/basketball"
+out_folder = "../basketball_dnerf"
+for folder in ["train", "test"]:
+    dynaGS_to_dnerf(inp_folder, out_folder, folder, mask_seg=False)
+```
+
+
+
 # Dynamic 3D Gaussians: Tracking by Persistent Dynamic View Synthesis
 ### [Project Page](https://dynamic3dgaussians.github.io/) | [Paper](https://arxiv.org/pdf/2308.09713.pdf) | [ArXiv](https://arxiv.org/abs/2308.09713) | [Tweet Thread](https://twitter.com/JonathonLuiten/status/1692346451668636100) | [Data](https://omnomnom.vision.rwth-aachen.de/data/Dynamic3DGaussians/data.zip) | [Pretrained Models](https://omnomnom.vision.rwth-aachen.de/data/Dynamic3DGaussians/output.zip)
 Official implementation of our approach for modelling the dynamic 3D world as a set of 3D Gaussians that move & rotate over time. This extends Gaussian Splatting to dynamic scenes, with accurate novel-view synthesis and dense 3D 6-DOF tracking.<br><br>

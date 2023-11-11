@@ -92,7 +92,7 @@ def params2cpu(params, is_initial_timestep):
     return res
 
 
-def save_params(output_params, seq, exp, step=0):
+def save_params(output_params, seq, exp, step=0, data_dir="."):
     to_save = {}
     for k in output_params[0].keys():
         if len(output_params) > 1:
@@ -102,5 +102,5 @@ def save_params(output_params, seq, exp, step=0):
                 to_save[k] = output_params[0][k]
         else:
             to_save[k] = output_params[0][k]
-    os.makedirs(f"./output/{exp}/{seq}", exist_ok=True)
-    np.savez(f"./output/{exp}/{seq}/params_step{step}", **to_save)
+    os.makedirs(f"{data_dir}/output/{exp}/{seq}", exist_ok=True)
+    np.savez(f"{data_dir}/output/{exp}/{seq}/params_step{step}", **to_save)

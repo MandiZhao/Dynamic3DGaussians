@@ -13,6 +13,10 @@ import os
 from glob import glob 
 from natsort import natsorted 
 import json
+from train import DATA_DIR
+import argparse
+from os.path import join
+import imageio
 
 RENDER_MODE = 'color'  # 'color', 'depth' or 'centers'
 # RENDER_MODE = 'depth'  # 'color', 'depth' or 'centers'
@@ -53,7 +57,7 @@ def init_camera(y_angle=0., center_dist=2.4, cam_height=1.3, f_ratio=0.82):
 
 def load_scene_data(seq, exp, seg_as_col=False):
     # params = dict(np.load(f"./output/{exp}/{seq}/params.npz"))
-    param_fnams = glob(f"./output/{exp}/{seq}/params_*.npz")
+    param_fnams = glob(f"{DATA_DIR}/output/{exp}/{seq}/params_*.npz")
     param_fnams = natsorted(param_fnams)
     print(f"Loading {param_fnams[-1]}")
     params = dict(np.load(param_fnams[-1]))
@@ -90,7 +94,7 @@ def make_lineset(all_pts, cols, num_lines):
     return linesets
 
 
-def calculate_trajectories(scene_data, is_fg):
+def calculate_trajectories(scene_data, is_fg, traj_frac=200, traj_length=1):
     in_pts = [data['means3D'][is_fg][::traj_frac].contiguous().float().cpu().numpy() for data in scene_data]
     num_lines = len(in_pts[0])
     cols = np.repeat(colormap[np.arange(len(in_pts[0])) % len(colormap)][None], traj_length, 0).reshape(-1, 3)
@@ -185,7 +189,7 @@ def visualize(seq, exp):
     lines = None
     if ADDITIONAL_LINES is not None:
         if ADDITIONAL_LINES == 'trajectories':
-            linesets = calculate_trajectories(scene_data, is_fg)
+            linesets = calculate_trajectories(scene_data, is_fg, traj_frac=traj_frac, traj_length=1)
         elif ADDITIONAL_LINES == 'rotations':
             linesets = calculate_rot_vec(scene_data, is_fg)
         lines = o3d.geometry.LineSet()
@@ -271,9 +275,10 @@ def visualize(seq, exp):
     del vis
     del render_options
 
-def render_video(seq, exp, meta_fname="data/corl_1_dense_rgb/val_meta.json", use_cameras=20):
+def render_video(seq, exp, meta_fname="data/corl_1_dense_rgb/val_meta.json", use_cameras=20, fps=20):
     import imageio
     scene_data, is_fg = load_scene_data(seq, exp) 
+    run_dir = f"{DATA_DIR}/output/{exp}/{seq}"
     w2cs, ks = load_test_camera(fname=meta_fname) # shape tstep, n_cameras, 4, 4
     all_renders = []
     n_frames = min(w2cs.shape[0], len(scene_data))
@@ -294,22 +299,25 @@ def render_video(seq, exp, meta_fname="data/corl_1_dense_rgb/val_meta.json", use
         )
     
     # save video
+    os.makedirs(f"./output/{exp}/{seq}", exist_ok=True)
     if 'train' in meta_fname:
-        video_fname = f"./output/{exp}/{seq}/train_cameras.mp4"
+        video_fname = "train_cameras.mp4"
     else:
-        video_fname = f"./output/{exp}/{seq}/test_cameras.mp4"
-    imageio.mimwrite(video_fname, all_renders, fps=20, quality=8)
+        video_fname = "test_cameras.mp4"
+    
+    video_fname = join(run_dir, video_fname)
+    imageio.mimwrite(video_fname, all_renders, fps=fps, quality=8)
     print(f"Saved video to {video_fname}")
     return 
 
 
-
 def plot_traj(seq, exp, totrack_pts=None, gt_traj=None):
-    scene_data, is_fg = load_scene_data(seq, exp) 
-    linesets = calculate_trajectories(scene_data, is_fg)
+    scene_data, is_fg = load_scene_data(seq, exp)  
+    run_dir = f"{DATA_DIR}/output/{exp}/{seq}"
+    linesets = calculate_trajectories(scene_data, is_fg, traj_frac=200, traj_length=1)
     # plot the linesets in 3D
     from matplotlib import pyplot as plt
-    fig = plt.figure()
+    fig = plt.figure(figsize=(8, 8))
     ax = fig.add_subplot(111, projection='3d')
     if totrack_pts is None:
         # plot all the pts
@@ -347,7 +355,22 @@ def plot_traj(seq, exp, totrack_pts=None, gt_traj=None):
                 #         points[end, 0], points[end, 1], points[end, 2], color='blue', label="end")
     plt.tight_layout()
     fname = f"traj_track_{len(totrack_pts)}pts.png" if totrack_pts is not None else f"traj_track_allpts.png"
-    plt.savefig(fname, dpi=400)
+    
+    def save_plot_video(ax, fname):
+        imgs = []
+        for az in range(0, 360, 60):
+            ax.view_init(elev=20., azim=az)
+            view_fname = f"v{az}_{fname}"
+            view_fname = join(run_dir, view_fname)
+            plt.savefig(view_fname, dpi=300)
+            imgs.append(Image.open(view_fname))
+            
+        # save mp4 
+        video_fname = fname.replace(".png", ".mp4")
+        video_fname = join(run_dir, video_fname)
+        imageio.mimwrite(video_fname, imgs, fps=2, quality=8)
+    
+    save_plot_video(ax, fname)
 
     if gt_traj is not None:
         ax = fig.add_subplot(111, projection='3d')
@@ -357,24 +380,55 @@ def plot_traj(seq, exp, totrack_pts=None, gt_traj=None):
             traj = gt_traj[:,i] # (time, 3)
             ax.plot(traj[:,0], traj[:,1], traj[:,2], color=color, alpha=0.9)
         fname = f"traj_gt_{len(totrack_pts)}pts.png" 
+        save_plot_video(ax, fname)
+        fname = join(run_dir, fname)
         plt.savefig(fname, dpi=400)
-
+ 
     breakpoint()
 if __name__ == "__main__":
     # exp_name = "pretrained"
     # for sequence in ["basketball", "boxes", "football", "juggle", "softball", "tennis"]:
     #     visualize(sequence, exp_name)
     # visualize('corl_1_dense_rgb', "subsample_100k")
-    render_video('corl_1_dense_rgb', "subsample_10k_moreitr", meta_fname="data/corl_1_dense_rgb/val_meta.json",)
-    exit()
-    traj_length = 1
-    traj_frac = 100 #4000
-    load_gt_fname = "corl_scene1.npz"
-    num_pts = 300
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--render', action='store_true', default=False)
+    parser.add_argument('--track', action='store_true', default=False)
+    parser.add_argument('--exp_name', '-ex', type=str, default="subsample_100k")
+    parser.add_argument('--data', '-d', type=str, default="corl_1_dense_rgb")
+    parser.add_argument('--load_gt_fname', default="../tracking_utils/gt_trajs/corl_1_dense_traj.npz")
+    parser.add_argument('--track_num_pts', '-n', type=int, default=100)
+    parser.add_argument('--track_all', action='store_true', default=False)
+    parser.add_argument('--fps', type=int, default=15)
+    args = parser.parse_args()
+
+    if args.render:
+        render_video(
+            args.data, args.exp_name, 
+            meta_fname=f"{DATA_DIR}/data/corl_1_dense_rgb/val_meta.json",
+            use_cameras=20, fps=args.fps)
+        
     
-    gt_traj = np.load(load_gt_fname)['traj'] # ~20k points, shape (t, N, 3)
-    idxs = np.random.choice(gt_traj.shape[1], num_pts, replace=False)
-    totrack_pts = gt_traj[0][idxs] # (N, 3)
-    # gt_traj = gt_traj[:, idxs] # (t, N, 3) 
-    gt_traj = None
-    plot_traj('corl_1_dense_rgb', "subsample_100k", totrack_pts, gt_traj)
+    traj_length = 1 # this is so dumb
+    if args.track:
+        traj_frac = 2000 #4000
+        load_gt_fname = args.load_gt_fname
+        num_pts = args.track_num_pts
+        gt_traj = np.load(load_gt_fname)['traj'] # ~20k points, shape (t, N, 3)
+        idxs = np.random.choice(gt_traj.shape[1], num_pts, replace=False)
+        totrack_pts = gt_traj[0][idxs] # (N, 3)
+        gt_traj = gt_traj[:, idxs] # (t, N, 3)  
+
+        plot_traj(args.data, args.exp_name, totrack_pts, gt_traj)
+    
+    if args.track_all:
+        traj_frac = 200 #4000 
+        totrack_pts = None
+        gt_traj = None
+
+        plot_traj(args.data, args.exp_name, totrack_pts, gt_traj)
+
+        
+    
+    
+    
+    

@@ -11,19 +11,21 @@ from helpers import setup_camera, l1_loss_v1, l1_loss_v2, weighted_l2_loss_v1, w
     o3d_knn, params2rendervar, params2cpu, save_params
 from external import calc_ssim, calc_psnr, build_rotation, densify, update_params_and_optimizer
 import pickle
+import argparse
 
+DATA_DIR="/local/real/mandi/Dynamic3DGaussians"
 def get_dataset(t, md, seq):
     dataset = []
     for c in range(len(md['fn'][t])):
         w, h, k, w2c = md['w'], md['h'], md['k'][t][c], md['w2c'][t][c]
         cam = setup_camera(w, h, k, w2c, near=1.0, far=100)
         fn = md['fn'][t][c]
-        im = np.array(copy.deepcopy(Image.open(f"./data/{seq}/ims/{fn}")))
+        im = np.array(copy.deepcopy(Image.open(f"{DATA_DIR}/data/{seq}/ims/{fn}")))
         # NEW: if img has alpha channel, remove it
         if im.shape[-1] == 4:
             im = im[:, :, :3]
         im = torch.tensor(im).float().cuda().permute(2, 0, 1) / 255
-        seg = np.array(copy.deepcopy(Image.open(f"./data/{seq}/seg/{fn.replace('.jpg', '.png')}"))).astype(np.float32)
+        seg = np.array(copy.deepcopy(Image.open(f"{DATA_DIR}/data/{seq}/seg/{fn.replace('.jpg', '.png')}"))).astype(np.float32)
         seg = torch.tensor(seg).float().cuda()
         seg_col = torch.stack((seg, torch.zeros_like(seg), 1 - seg))
         dataset.append({'cam': cam, 'im': im, 'seg': seg_col, 'id': c})
@@ -38,7 +40,7 @@ def get_batch(todo_dataset, dataset):
 
 
 def initialize_params(seq, md, subsample=-1):
-    init_pt_cld = np.load(f"./data/{seq}/init_pt_cld.npz")
+    init_pt_cld = np.load(f"{DATA_DIR}/data/{seq}/init_pt_cld.npz")
     if 'data' in init_pt_cld:
         init_pt_cld = init_pt_cld["data"]
     else:
@@ -74,12 +76,12 @@ def initialize_params(seq, md, subsample=-1):
     return params, variables
 
 
-def initialize_optimizer(params, variables):
+def initialize_optimizer(params, variables, args):
     lrs = {
-        'means3D': 0.00016 * variables['scene_radius'],
-        'rgb_colors': 0.0025,
+        'means3D': args.lr_means * variables['scene_radius'],
+        'rgb_colors': args.lr_rgb,
         'seg_colors': 0.0,
-        'unnorm_rotations': 0.001,
+        'unnorm_rotations': args.lr_rot,
         'logit_opacities': 0.05,
         'log_scales': 0.001,
         'cam_m': 1e-4,
@@ -129,10 +131,14 @@ def get_loss(params, curr_data, variables, is_initial_timestep, return_losses=Fa
         bg_pts = rendervar['means3D'][~is_fg]
         bg_rot = rendervar['rotations'][~is_fg]
         losses['bg'] = l1_loss_v2(bg_pts, variables["init_bg_pts"]) + l1_loss_v2(bg_rot, variables["init_bg_rot"])
+        if len(bg_pts) == 0:
+            # print("no background points, compute loss on foreground pts instead")
+            # losses['bg'] = l1_loss_v2(fg_pts, variables["init_fg_pts"]) + l1_loss_v2(fg_rot, variables["init_fg_rot"])
+            losses.pop('bg')
 
         losses['soft_col_cons'] = l1_loss_v2(params['rgb_colors'], variables["prev_col"])
 
-    loss_weights = {'im': 1.0, 'seg': 3.0, 'rigid': 4.0, 'rot': 4.0, 'iso': 2.0, 'floor': 2.0, 'bg': 20.0,
+    loss_weights = {'im': 4.0, 'seg': 3.0, 'rigid': 4.0, 'rot': 4.0, 'iso': 2.0, 'floor': 0, 'bg': 20.0,
                     'soft_col_cons': 0.01}
     loss = sum([loss_weights[k] * v for k, v in losses.items()])
     seen = radius > 0
@@ -183,6 +189,9 @@ def initialize_post_first_timestep(params, variables, optimizer, num_knn=20):
     variables["init_bg_rot"] = init_bg_rot.detach()
     variables["prev_pts"] = params['means3D'].detach()
     variables["prev_rot"] = torch.nn.functional.normalize(params['unnorm_rotations']).detach()
+
+    variables["init_fg_pts"] = init_fg_pts.detach()
+    variables["init_fg_rot"] = torch.nn.functional.normalize(params['unnorm_rotations'][is_fg]).detach()
     params_to_fix = ['logit_opacities', 'log_scales', 'cam_m', 'cam_c']
     for param_group in optimizer.param_groups:
         if param_group["name"] in params_to_fix:
@@ -203,24 +212,25 @@ def report_progress(params, data, i, progress_bar, every_i=100):
     return None
 
 
-def train(seq, exp):
-    if os.path.exists(f"./output/{exp}/{seq}"):
+def train(seq, exp, args):
+    # DATA_DIR = "/local/real/mandi/Dynamic3DGaussians"
+    if os.path.exists(f"{DATA_DIR}/output/{exp}/{seq}"):
         print(f"Experiment '{exp}' for sequence '{seq}' already exists. Exiting.")
         return
-    md = json.load(open(f"./data/{seq}/train_meta.json", 'r'))  # metadata
+    md = json.load(open(f"{DATA_DIR}/data/{seq}/train_meta.json", 'r'))  # metadata
     num_timesteps = len(md['fn'])
-    params, variables = initialize_params(seq, md, subsample=5000)
-    optimizer = initialize_optimizer(params, variables)
+    params, variables = initialize_params(seq, md, subsample=int(args.subsample))
+    optimizer = initialize_optimizer(params, variables, args)
     output_params = []
-    for t in range(num_timesteps):
+
+    train_timesteps = list(range(0, num_timesteps, args.time_interval))
+    for t in train_timesteps:
         dataset = get_dataset(t, md, seq)
         todo_dataset = []
         is_initial_timestep = (t == 0)
         if not is_initial_timestep:
             params, variables = initialize_per_timestep(params, variables, optimizer)
-        num_iter_per_timestep = 10000 if is_initial_timestep else 6000
-        # if t in [1, 2]:
-        #     num_iter_per_timestep = 8000 
+        num_iter_per_timestep = 10000 if is_initial_timestep else int(args.iterations)
         progress_bar = tqdm(range(num_iter_per_timestep), desc=f"timestep {t}")
         psnrs = []
         for i in range(num_iter_per_timestep):
@@ -235,23 +245,41 @@ def train(seq, exp):
                 optimizer.zero_grad(set_to_none=True)
             if maybe_psnr is not None:
                 psnrs.append(maybe_psnr.detach().cpu().numpy())
+                thres = 100 # if is_initial_timestep else 31
+                if maybe_psnr.detach().cpu().numpy() > thres:
+                    print(f"PSNR > {thres} reached at step {i}, early stopping")
+                    break
         progress_bar.close()
         output_params.append(params2cpu(params, is_initial_timestep))
         if is_initial_timestep:
             variables = initialize_post_first_timestep(params, variables, optimizer)
-        save_params(output_params, seq, exp, step=t)
+        
+        save_params(output_params, seq, exp, step=t, data_dir=DATA_DIR)
         # save loss:
         losses = {k: v.detach().cpu().numpy() for k, v in losses.items()}
         losses['psnr'] = np.array(psnrs)
-        with open(f"./output/{exp}/{seq}/losses_step{t}.pkl", 'wb') as f:
+        with open(f"{DATA_DIR}/output/{exp}/{seq}/losses_step{t}.pkl", 'wb') as f:
             pickle.dump(losses, f)
-            
+         
 
-    save_params(output_params, seq, exp, step=num_timesteps)
+    save_params(output_params, seq, exp, step=num_timesteps, data_dir=DATA_DIR)
 
 
 if __name__ == "__main__":
-    exp_name = "subsample_5k_densify"
-    for sequence in ["corl_1_dense_rgb"]: #["basketball", "boxes", "football", "juggle", "softball", "tennis"]:
-        train(sequence, exp_name)
-        torch.cuda.empty_cache()
+    exp_name = "subsample_50k_img"
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--exp_name", "-ex", default='exp')
+    parser.add_argument("--data", "-d", default='corl_1_dense_rgb')
+    parser.add_argument("--subsample", "-s", default=50000, type=int)
+    parser.add_argument("--time_interval", "-t", default=1, type=int)
+    parser.add_argument("--iterations", "-i", default=6000, type=int)
+    parser.add_argument("--lr_means", "-lrm", default=0.00016, type=float)
+    parser.add_argument("--lr_rot", "-lrr", default=0.001, type=float)
+    parser.add_argument("--lr_rgb", "-lrc", default=0.0025, type=float)
+    args = parser.parse_args()
+    train(args.data, args.exp_name, args)
+    torch.cuda.empty_cache()
+
+    # for sequence in ["basketball", "boxes", "football", "juggle", "softball", "tennis"]:
+    #     train(sequence, exp_name)
+    #     torch.cuda.empty_cache()
