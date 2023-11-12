@@ -27,7 +27,6 @@ def setup_camera(w, h, k, w2c, near=0.01, far=100):
         sh_degree=0,
         campos=cam_center,
         prefiltered=False,
-        debug=False,
         )
     return cam
 

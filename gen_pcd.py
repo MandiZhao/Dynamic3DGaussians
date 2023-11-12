@@ -48,7 +48,7 @@ def get_extrinsics(transform_matrix):
     P_inv[1,:] *= -1
     return P_inv
 
-INP_PATH = "../corl_1_dense_rgb"
+INP_PATH = "data/corl_1_dense"
 folder = "train"
 loaded_depth = np.load(
     join(INP_PATH, "depth_first.npz")

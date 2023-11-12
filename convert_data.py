@@ -6,7 +6,7 @@ from glob import glob
 from natsort import natsorted
 from PIL import Image
 import shutil
-
+import tqdm 
 """ 
 1) converts dnerf data format into the dynamic3dgaussians format
 NOTE: need to project pointcloud, need to rotate the cam. frame to be compatible with blender
@@ -15,7 +15,7 @@ NOTE: need to project pointcloud, need to rotate the cam. frame to be compatible
 """
  
 
-def dnerf_to_dynaGS(inp_folder, out_folder, folder='train', reference_fname="data/basketball/train_meta.json", cam_id_offset=0):
+def dnerf_to_dynaGS(inp_folder, out_folder, folder='train', reference_fname=None, cam_id_offset=0):
     if reference_fname is not None:
         assert '.json' in reference_fname, "reference_fname must be a json file"
         with open(reference_fname) as f:
@@ -63,7 +63,7 @@ def dnerf_to_dynaGS(inp_folder, out_folder, folder='train', reference_fname="dat
     all_w2c = []
     cam_id = [] 
     k_matrix = [] 
-    for t in sorted(list(set(tsteps))):
+    for t in tqdm.tqdm(sorted(list(set(tsteps)))):
         curr_fnames = []
         curr_w2c = []
         curr_cam_id = []
@@ -230,11 +230,11 @@ def dynaGS_to_dnerf(
     print(f"Done writing to {new_meta_fname}")
     return 
 ### OPTION1: convert basketball data to dnerf format    
-inp_folder = "../corl_1_dense_rgb"
-out_folder = "data/scene_a" 
+inp_folder = "data/corl_1_dense"
+out_folder = "data/corl_1_dense_pano" 
 os.makedirs(out_folder, exist_ok=True)
 cam_id_offset = 0
-for folder in ["train", "val"]:
+for folder in ["train", "test"]:
     cam_id_offset = dnerf_to_dynaGS(inp_folder, out_folder, folder, cam_id_offset=cam_id_offset)
     print(f"cam_id_offset: {cam_id_offset}")
 
@@ -243,4 +243,4 @@ for folder in ["train", "val"]:
 # out_folder = "../basketball_dnerf"
 # for folder in ["train", "test"]:
 #     dynaGS_to_dnerf(inp_folder, out_folder, folder, mask_seg=False)
-# breakpoint()
+breakpoint()

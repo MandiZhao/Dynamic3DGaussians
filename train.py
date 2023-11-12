@@ -13,7 +13,7 @@ from external import calc_ssim, calc_psnr, build_rotation, densify, update_param
 import pickle
 import argparse
 
-DATA_DIR="/local/real/mandi/Dynamic3DGaussians"
+DATA_DIR="/Dynamic3DGaussians/"
 def get_dataset(t, md, seq):
     dataset = []
     for c in range(len(md['fn'][t])):
@@ -140,6 +140,7 @@ def get_loss(params, curr_data, variables, is_initial_timestep, return_losses=Fa
 
     loss_weights = {'im': 4.0, 'seg': 3.0, 'rigid': 4.0, 'rot': 4.0, 'iso': 2.0, 'floor': 0, 'bg': 20.0,
                     'soft_col_cons': 0.01}
+    
     loss = sum([loss_weights[k] * v for k, v in losses.items()])
     seen = radius > 0
     variables['max_2D_radius'][seen] = torch.max(radius[seen], variables['max_2D_radius'][seen])
@@ -269,7 +270,7 @@ if __name__ == "__main__":
     exp_name = "subsample_50k_img"
     parser = argparse.ArgumentParser()
     parser.add_argument("--exp_name", "-ex", default='exp')
-    parser.add_argument("--data", "-d", default='corl_1_dense_rgb')
+    parser.add_argument("--data", "-d", default='corl_1_dense_pano')
     parser.add_argument("--subsample", "-s", default=50000, type=int)
     parser.add_argument("--time_interval", "-t", default=1, type=int)
     parser.add_argument("--iterations", "-i", default=6000, type=int)
