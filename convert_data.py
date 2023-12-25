@@ -189,9 +189,6 @@ def dynaGS_to_dnerf(
             c2w[:3, :3] = R.T
             c2w[:3, 3] = -R.T @ T
 
-            # correct for blender frame
-            # c2w[2,:] *= -1
-            # c2w[1,:] *= -1
 
             c2w = c2w.tolist()
 
