@@ -130,7 +130,7 @@ def dynaGS_to_dnerf(
         out_folder,
         folder='train', 
         time_decimal=3,
-        reference_fname="../scene_a_no_depth/transforms_train.json",
+        reference_fname=None,
         mask_seg=False,
     ):
     if reference_fname is not None:
@@ -178,10 +178,23 @@ def dynaGS_to_dnerf(
     frames = []
     for t, fnames in enumerate(fns):
         for i, fname in enumerate(fnames):
-            cam_id = cam_ids[t][i]
+            # cam_id = cam_ids[t][i]
             time = t / tot_time
             w2c = np.array(w2cs[t][i])
-            c2w = np.linalg.inv(w2c).tolist()
+            w2c[2,:] *= -1
+            w2c[1,:] *= -1
+            R = w2c[:3, :3]
+            T = w2c[:3, 3]
+            c2w = np.eye(4)
+            c2w[:3, :3] = R.T
+            c2w[:3, 3] = -R.T @ T
+
+            # correct for blender frame
+            # c2w[2,:] *= -1
+            # c2w[1,:] *= -1
+
+            c2w = c2w.tolist()
+
             frames.append(dict(
                 file_path=join(".", folder, "_".join(fname.split("/"))), 
                 time=time,
@@ -230,17 +243,22 @@ def dynaGS_to_dnerf(
     print(f"Done writing to {new_meta_fname}")
     return 
 ### OPTION1: convert basketball data to dnerf format    
-inp_folder = "data/corl_1_dense"
-out_folder = "data/corl_1_dense_pano" 
-os.makedirs(out_folder, exist_ok=True)
-cam_id_offset = 0
-for folder in ["train", "test"]:
-    cam_id_offset = dnerf_to_dynaGS(inp_folder, out_folder, folder, cam_id_offset=cam_id_offset)
-    print(f"cam_id_offset: {cam_id_offset}")
+# inp_folder = "data/corl_1_dense"
+# out_folder = "data/corl_1_dense_pano" 
+# os.makedirs(out_folder, exist_ok=True)
+# cam_id_offset = 0
+# for folder in ["train", "test"]:
+#     cam_id_offset = dnerf_to_dynaGS(inp_folder, out_folder, folder, cam_id_offset=cam_id_offset)
+#     print(f"cam_id_offset: {cam_id_offset}")
 
 #### OPTION2: convert dnerf data to dynamic3dgaussians format
-# inp_folder = "data/basketball"
-# out_folder = "../basketball_dnerf"
-# for folder in ["train", "test"]:
-#     dynaGS_to_dnerf(inp_folder, out_folder, folder, mask_seg=False)
-breakpoint()
+inp_folder = "data/basketball"
+out_folder = "data/basketball_dnerf"
+
+#if out folder exists, destroy it
+if os.path.exists(out_folder):
+    shutil.rmtree(out_folder)
+
+for folder in ["train", "test"]:
+    dynaGS_to_dnerf(inp_folder, out_folder, folder, mask_seg=False)
+# breakpoint()
