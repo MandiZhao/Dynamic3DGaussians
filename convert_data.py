@@ -132,62 +132,59 @@ def dynaGS_to_dnerf(
         time_decimal=3,
         reference_fname=None,
         mask_seg=False,
+        tot_time = None,
     ):
     if reference_fname is not None:
         with open(reference_fname) as f:
             reference_data = json.load(f)
         print('reference data keys:', reference_data.keys())
-        # "camera_angle_x": 0.6911112070083618,
-        # "camera_angle_y": 0.6911112070083618,
-        # "fl_x": 1111.1110311937682,
-        # "fl_y": 1111.1110311937682,
-        # "w": 800,
-        # "h": 800,
-        # "cx": 400.0,
-        # "cy": 400.0,
-        # "n_frames": 11,
-        # "frames": [
-        # {"file_path", "time", "transform_matrix": c2w matrix, "type"}
-        #]
     old_meta = join(inp_folder, f"{folder}_meta.json")
     with open(old_meta) as f:
         old_meta_data = json.load(f)
     w, h = old_meta_data['w'], old_meta_data['h']
-    k_matrix = old_meta_data['k'][0][0] # 3x3 matrix, nested list
-    focal_x = k_matrix[0][0] # np.tan(angle_x / 2) = (h / 2) / focal_x
-    focal_y = k_matrix[1][1] 
-    angle_x = 2 * np.arctan(h / (2 * focal_x))
-    angle_y = 2 * np.arctan(w / (2 * focal_y))
-    
+
+    k_data = np.array(old_meta_data['k'])
+
+   
+
     new_meta_data = dict(
-        camera_angle_x=angle_x,
-        camera_angle_y=angle_y,
-        fl_x=focal_x,
-        fl_y=focal_y,
-        w=w, 
-        h=h,
-        cx=w/2,
-        cy=h/2,
     )
     print('begin composing new meta data:', new_meta_data)
     cam_ids = old_meta_data['cam_id'] # 150 tsteps x 27 frames
     w2cs = old_meta_data['w2c'] # 150 tsteps x 27 frames x 4x4 matrix
     fns = old_meta_data['fn'] # 150 tsteps x 27 frames
     # NOTE: dynamicGS has no notion of timestep, so approaximate it from 0 to 1 here
-    tot_time = len(cam_ids) - 1
+    if tot_time is None:
+        tot_time = len(cam_ids) - 1
+    print(len(cam_ids))
     frames = []
+
     for t, fnames in enumerate(fns):
         for i, fname in enumerate(fnames):
             # cam_id = cam_ids[t][i]
             time = t / tot_time
+            
             w2c = np.array(w2cs[t][i])
+
+
             w2c[2,:] *= -1
             w2c[1,:] *= -1
+
+            # # # swap row 0 and 1
+            # w2c[[0, 1]] = w2c[[1, 0]]
+
+            # print(w2c)
+            # exit()
+
             R = w2c[:3, :3]
             T = w2c[:3, 3]
             c2w = np.eye(4)
             c2w[:3, :3] = R.T
             c2w[:3, 3] = -R.T @ T
+            # c2w = w2c
+
+            # print(c2w)
+            # exit()
 
 
             c2w = c2w.tolist()
@@ -196,8 +193,13 @@ def dynaGS_to_dnerf(
                 file_path=join(".", folder, "_".join(fname.split("/"))), 
                 time=time,
                 transform_matrix=c2w,
-                type="wrap"
+                type="wrap",
+                k = k_data[t][i].tolist(),
+                w = w,
+                h = h,
             ))
+
+
     new_meta_data["n_frames"] = len(cam_ids)
     new_meta_data["frames"] = frames
     os.makedirs(
@@ -238,7 +240,7 @@ def dynaGS_to_dnerf(
                 shutil.copy(img_fname, new_fname)
 
     print(f"Done writing to {new_meta_fname}")
-    return 
+    return tot_time
 ### OPTION1: convert basketball data to dnerf format    
 # inp_folder = "data/corl_1_dense"
 # out_folder = "data/corl_1_dense_pano" 
@@ -256,6 +258,8 @@ out_folder = "data/basketball_dnerf"
 if os.path.exists(out_folder):
     shutil.rmtree(out_folder)
 
-for folder in ["train", "test"]:
-    dynaGS_to_dnerf(inp_folder, out_folder, folder, mask_seg=False)
+# for folder in ["train", "test"]:
+train_tot_time = dynaGS_to_dnerf(inp_folder, out_folder, "train", mask_seg=False)
+_ = dynaGS_to_dnerf(inp_folder, out_folder, "test", mask_seg=False,tot_time=train_tot_time) # to make sure a subsampled test set doesn't cause problems
+
 # breakpoint()
