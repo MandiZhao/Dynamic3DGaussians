@@ -7,6 +7,7 @@ from natsort import natsorted
 from PIL import Image
 import shutil
 import tqdm 
+from argparse import ArgumentParser
 """ 
 1) converts dnerf data format into the dynamic3dgaussians format
 NOTE: need to project pointcloud, need to rotate the cam. frame to be compatible with blender
@@ -28,10 +29,11 @@ def dnerf_to_dynaGS(inp_folder, out_folder, folder='train', reference_fname=None
         # data['cam_id']: 150 x 27
 
     if folder == 'train':
-        assert os.path.exists(join(inp_folder, folder, 'init_pt_cld.npz')), "no init_pt_cld.npz"
+        path = (join(inp_folder, 'init_pt_cld.npz'))
+        assert os.path.exists(path), "no init_pt_cld.npz"
         os.makedirs(join(out_folder, 'train'), exist_ok=True)
         shutil.copy(
-            join(inp_folder, folder, 'init_pt_cld.npz'), join(out_folder, 'train', 'init_pt_cld.npz'))
+            path, join(out_folder, 'init_pt_cld.npz'))
     new_meta_data = dict()
     imgs = natsorted(glob(join(inp_folder, folder, "*.png"))) # r_camid_tstep.png 
     tsteps, cam_ids = [], []
@@ -249,17 +251,21 @@ def dynaGS_to_dnerf(
 # for folder in ["train", "test"]:
 #     cam_id_offset = dnerf_to_dynaGS(inp_folder, out_folder, folder, cam_id_offset=cam_id_offset)
 #     print(f"cam_id_offset: {cam_id_offset}")
-
+parser = ArgumentParser()
+parser.add_argument('--inp_folder', type=str, default='data/KTH/shorts_1_0')
+args = parser.parse_args()
 #### OPTION2: convert dnerf data to dynamic3dgaussians format
-inp_folder = "data/basketball"
-out_folder = "data/basketball_dnerf"
+inp_folder = args.inp_folder
+#out_folder = "data/KTH_shorts_1_0_dnerf"
+out_folder = inp_folder + "_dnerf"
 
 #if out folder exists, destroy it
 if os.path.exists(out_folder):
     shutil.rmtree(out_folder)
 
+print(out_folder)
 # for folder in ["train", "test"]:
-train_tot_time = dynaGS_to_dnerf(inp_folder, out_folder, "train", mask_seg=False)
-_ = dynaGS_to_dnerf(inp_folder, out_folder, "test", mask_seg=False,tot_time=train_tot_time) # to make sure a subsampled test set doesn't cause problems
+train_tot_time = dnerf_to_dynaGS(inp_folder, out_folder, "train")
+#_ = dynaGS_to_dnerf(inp_folder, out_folder, "test", mask_seg=False,tot_time=train_tot_time) # to make sure a subsampled test set doesn't cause problems
 
 # breakpoint()

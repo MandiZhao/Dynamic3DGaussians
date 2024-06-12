@@ -62,7 +62,9 @@ def load_scene_data(seq, exp, seg_as_col=False):
     print(f"Loading {param_fnams[-1]}")
     params = dict(np.load(param_fnams[-1]))
     params = {k: torch.tensor(v).cuda().float() for k, v in params.items()} 
-    is_fg = params['seg_colors'][:, 0] > 0.5
+    is_fg = params['seg_colors'][:, 0] > -0.5
+    is_fg = torch.zeros_like(is_fg, dtype=torch.bool).to(is_fg.device)
+
     scene_data = []
     for t in range(len(params['means3D'])):
         rendervar = {
@@ -404,8 +406,8 @@ if __name__ == "__main__":
     if args.render:
         render_video(
             args.data, args.exp_name, 
-            meta_fname=f"{DATA_DIR}/data/corl_1_dense_rgb/val_meta.json",
-            use_cameras=20, fps=args.fps)
+            meta_fname=f"{DATA_DIR}/data/{args.data}/val_meta.json",
+            use_cameras=1, fps=args.fps)
         
     
     traj_length = 1 # this is so dumb
@@ -413,7 +415,7 @@ if __name__ == "__main__":
         traj_frac = 2000 #4000
         load_gt_fname = args.load_gt_fname
         num_pts = args.track_num_pts
-        gt_traj = np.load(load_gt_fname)['traj'] # ~20k points, shape (t, N, 3)
+        gt_traj = np.load(load_gt_fname)['pos'] # ~20k points, shape (t, N, 3)
         idxs = np.random.choice(gt_traj.shape[1], num_pts, replace=False)
         totrack_pts = gt_traj[0][idxs] # (N, 3)
         gt_traj = gt_traj[:, idxs] # (t, N, 3)  

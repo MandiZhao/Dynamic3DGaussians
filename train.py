@@ -12,14 +12,20 @@ from helpers import setup_camera, l1_loss_v1, l1_loss_v2, weighted_l2_loss_v1, w
 from external import calc_ssim, calc_psnr, build_rotation, densify, update_params_and_optimizer
 import pickle
 import argparse
-
-DATA_DIR="/Dynamic3DGaussians/"
+VIEW_SKIP=3
+DATA_DIR="/3dgs/"
 def get_dataset(t, md, seq):
     dataset = []
     for c in range(len(md['fn'][t])):
         w, h, k, w2c = md['w'], md['h'], md['k'][t][c], md['w2c'][t][c]
         cam = setup_camera(w, h, k, w2c, near=1.0, far=100)
         fn = md['fn'][t][c]
+        
+        view_id = int(os.path.dirname(fn)) 
+
+        if view_id % VIEW_SKIP != 0:
+            continue
+        print(fn)
         im = np.array(copy.deepcopy(Image.open(f"{DATA_DIR}/data/{seq}/ims/{fn}")))
         # NEW: if img has alpha channel, remove it
         if im.shape[-1] == 4:
@@ -50,15 +56,16 @@ def initialize_params(seq, md, subsample=-1):
         idxs = np.random.choice(len(init_pt_cld), subsample, replace=(len(init_pt_cld) < subsample))
         print(f"Subsampling {len(init_pt_cld)} points to {subsample}")
         init_pt_cld = init_pt_cld[idxs]
-    seg = init_pt_cld[:, 6]
+    #seg = init_pt_cld[:, 6]
+    seg = np.zeros_like(init_pt_cld[:, 0])
     # max_cams = 50
     max_cams = 100
     sq_dist, _ = o3d_knn(init_pt_cld[:, :3], 3)
     mean3_sq_dist = sq_dist.mean(-1).clip(min=0.0000001)
     params = {
         'means3D': init_pt_cld[:, :3],
-        'rgb_colors': init_pt_cld[:, 3:6],
-        'seg_colors': np.stack((seg, np.zeros_like(seg), 1 - seg), -1),
+        'rgb_colors': np.random.rand(init_pt_cld.shape[0], 3).astype(np.float32),
+        'seg_colors': np.stack((seg, np.ones_like(seg), 1 - seg), -1),
         'unnorm_rotations': np.tile([1, 0, 0, 0], (seg.shape[0], 1)),
         'logit_opacities': np.zeros((seg.shape[0], 1)),
         'log_scales': np.tile(np.log(np.sqrt(mean3_sq_dist))[..., None], (1, 3)),
@@ -109,6 +116,8 @@ def get_loss(params, curr_data, variables, is_initial_timestep, return_losses=Fa
 
     if not is_initial_timestep:
         is_fg = (params['seg_colors'][:, 0] > 0.5).detach()
+        is_fg = torch.ones_like(is_fg, dtype=torch.bool).to(is_fg.device)
+        
         fg_pts = rendervar['means3D'][is_fg]
         fg_rot = rendervar['rotations'][is_fg]
 
@@ -138,7 +147,7 @@ def get_loss(params, curr_data, variables, is_initial_timestep, return_losses=Fa
 
         losses['soft_col_cons'] = l1_loss_v2(params['rgb_colors'], variables["prev_col"])
 
-    loss_weights = {'im': 4.0, 'seg': 3.0, 'rigid': 4.0, 'rot': 4.0, 'iso': 2.0, 'floor': 0, 'bg': 20.0,
+    loss_weights = {'im': 4.0, 'seg': 0.0, 'rigid': 4.0, 'rot': 4.0, 'iso': 2.0, 'floor': 0, 'bg': 0.0,
                     'soft_col_cons': 0.01}
     
     loss = sum([loss_weights[k] * v for k, v in losses.items()])
@@ -158,6 +167,7 @@ def initialize_per_timestep(params, variables, optimizer):
     new_rot = torch.nn.functional.normalize(rot + (rot - variables["prev_rot"]))
 
     is_fg = params['seg_colors'][:, 0] > 0.5
+    is_fg = torch.ones_like(is_fg, dtype=torch.bool).to(is_fg.device)
     prev_inv_rot_fg = rot[is_fg]
     prev_inv_rot_fg[:, 1:] = -1 * prev_inv_rot_fg[:, 1:]
     fg_pts = pts[is_fg]
@@ -176,6 +186,7 @@ def initialize_per_timestep(params, variables, optimizer):
 
 def initialize_post_first_timestep(params, variables, optimizer, num_knn=20):
     is_fg = params['seg_colors'][:, 0] > 0.5
+    is_fg = torch.ones_like(is_fg, dtype=torch.bool).to(is_fg.device)
     init_fg_pts = params['means3D'][is_fg]
     init_bg_pts = params['means3D'][~is_fg]
     init_bg_rot = torch.nn.functional.normalize(params['unnorm_rotations'][~is_fg])
