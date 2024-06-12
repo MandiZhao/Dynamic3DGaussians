@@ -13,7 +13,8 @@ from external import calc_ssim, calc_psnr, build_rotation, densify, update_param
 import pickle
 import argparse
 
-DATA_DIR="/Dynamic3DGaussians/"
+DATA_DIR="/3dgs/"
+ENV_SIZE_INIT=20.0
 def get_dataset(t, md, seq):
     dataset = []
     for c in range(len(md['fn'][t])):
@@ -25,7 +26,12 @@ def get_dataset(t, md, seq):
         if im.shape[-1] == 4:
             im = im[:, :, :3]
         im = torch.tensor(im).float().cuda().permute(2, 0, 1) / 255
-        seg = np.array(copy.deepcopy(Image.open(f"{DATA_DIR}/data/{seq}/seg/{fn.replace('.jpg', '.png')}"))).astype(np.float32)
+        filename =f"{DATA_DIR}/data/{seq}/seg/{fn.replace('.jpg', '.png')}"  
+        if not os.path.exists(filename):
+            filename =f"{DATA_DIR}/data/{seq}/seg/{fn.split('/')[-1].replace('.jpg', '.png')}"  
+            
+
+        seg = np.array(copy.deepcopy(Image.open(filename))).astype(np.float32)
         seg = torch.tensor(seg).float().cuda()
         seg_col = torch.stack((seg, torch.zeros_like(seg), 1 - seg))
         dataset.append({'cam': cam, 'im': im, 'seg': seg_col, 'id': c})
@@ -40,16 +46,23 @@ def get_batch(todo_dataset, dataset):
 
 
 def initialize_params(seq, md, subsample=-1):
-    init_pt_cld = np.load(f"{DATA_DIR}/data/{seq}/init_pt_cld.npz")
-    if 'data' in init_pt_cld:
-        init_pt_cld = init_pt_cld["data"]
+    path =  f"{DATA_DIR}/data/{seq}/init_pt_cld.npz"
+    if os.path.exists(path):
+        init_pt_cld = np.load(f"{DATA_DIR}/data/{seq}/init_pt_cld.npz")
+        if 'data' in init_pt_cld:
+            init_pt_cld = init_pt_cld["data"]
+        else:
+            key = list(init_pt_cld.keys())[0]
+            init_pt_cld = init_pt_cld[key]
+        if subsample > 0:
+            idxs = np.random.choice(len(init_pt_cld), subsample, replace=(len(init_pt_cld) < subsample))
+            print(f"Subsampling {len(init_pt_cld)} points to {subsample}")
+            init_pt_cld = init_pt_cld[idxs]
     else:
-        key = list(init_pt_cld.keys())[0]
-        init_pt_cld = init_pt_cld[key]
-    if subsample > 0:
-        idxs = np.random.choice(len(init_pt_cld), subsample, replace=(len(init_pt_cld) < subsample))
-        print(f"Subsampling {len(init_pt_cld)} points to {subsample}")
-        init_pt_cld = init_pt_cld[idxs]
+        init_pt_cld = np.random.uniform(0,1,subsample*7).reshape((subsample, 7))
+        # get init_pt_cld in range [-ENV_SIZE_INIT/2, ENV_SIZE_INIT/2]
+        init_pt_cld[:, :3] = init_pt_cld[:, :3] * ENV_SIZE_INIT - ENV_SIZE_INIT / 2
+    
     seg = init_pt_cld[:, 6]
     # max_cams = 50
     max_cams = 100
@@ -231,7 +244,7 @@ def train(seq, exp, args):
         is_initial_timestep = (t == 0)
         if not is_initial_timestep:
             params, variables = initialize_per_timestep(params, variables, optimizer)
-        num_iter_per_timestep = 10000 if is_initial_timestep else int(args.iterations)
+        num_iter_per_timestep = 20000 if is_initial_timestep else int(args.iterations)
         progress_bar = tqdm(range(num_iter_per_timestep), desc=f"timestep {t}")
         psnrs = []
         for i in range(num_iter_per_timestep):

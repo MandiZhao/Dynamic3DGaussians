@@ -27,13 +27,14 @@ def dnerf_to_dynaGS(inp_folder, out_folder, folder='train', reference_fname=None
         # 'w2c': 150 x 27 x (4x4 matrix)
         # 'fn': 150 x 27 filenames: '1/000000.jpg'.,...
         # data['cam_id']: 150 x 27
-
+    os.makedirs(out_folder, exist_ok=True)
     if folder == 'train':
         path = (join(inp_folder, 'init_pt_cld.npz'))
-        assert os.path.exists(path), "no init_pt_cld.npz"
-        os.makedirs(join(out_folder, 'train'), exist_ok=True)
-        shutil.copy(
-            path, join(out_folder, 'init_pt_cld.npz'))
+        #assert os.path.exists(path), "no init_pt_cld.npz"
+        if os.path.exists(path):
+            os.makedirs(join(out_folder, 'train'), exist_ok=True)
+            shutil.copy(
+                path, join(out_folder, 'init_pt_cld.npz'))
     new_meta_data = dict()
     imgs = natsorted(glob(join(inp_folder, folder, "*.png"))) # r_camid_tstep.png 
     tsteps, cam_ids = [], []
@@ -64,7 +65,17 @@ def dnerf_to_dynaGS(inp_folder, out_folder, folder='train', reference_fname=None
     fnames = []
     all_w2c = []
     cam_id = [] 
-    k_matrix = [] 
+    k_matrix = []
+
+    masks_provided = False
+    if os.path.exists(os.path.join(inp_folder, 'masks')):
+        # copy over the masks folder as seg folder
+        shutil.copytree(
+            join(inp_folder, 'masks'), join(out_folder, 'seg')
+        )
+        masks_provided = True
+
+
     for t in tqdm.tqdm(sorted(list(set(tsteps)))):
         curr_fnames = []
         curr_w2c = []
@@ -76,8 +87,9 @@ def dnerf_to_dynaGS(inp_folder, out_folder, folder='train', reference_fname=None
             new_cam_id = c + cam_id_offset
             os.makedirs(
                 join(out_folder, 'ims', str(new_cam_id)) , exist_ok=True)
-            os.makedirs(
-                join(out_folder, 'seg', str(new_cam_id)) , exist_ok=True)
+            if not masks_provided:
+                os.makedirs(
+                    join(out_folder, 'seg', str(new_cam_id)) , exist_ok=True)
             shutil.copy(
                 img_fname, join(out_folder, 'ims', str(new_cam_id), img_fname.split("/")[-1])
                 )
@@ -93,12 +105,14 @@ def dnerf_to_dynaGS(inp_folder, out_folder, folder='train', reference_fname=None
             curr_cam_id.append(
                 new_cam_id
             )
-            img = Image.open(img_fname) # get the background as seg mask!
-            img = np.array(img)
-            assert img.shape[-1] == 4, "not RGBA"
-            mask = img[:, :, -1]
-            mask = Image.fromarray(mask)
-            mask.save(join(out_folder, 'seg', str(new_cam_id), img_fname.split("/")[-1]))
+
+            if not masks_provided:
+                img = Image.open(img_fname) # get the background as seg mask!
+                img = np.array(img)
+                assert img.shape[-1] == 4, "not RGBA"
+                mask = img[:, :, -1]
+                mask = Image.fromarray(mask)
+                mask.save(join(out_folder, 'seg', str(new_cam_id), img_fname.split("/")[-1]))
 
             # to get data['k']: use the cam angle and h, w to get intrinsic 
             angle_x, angle_y = transforms["camera_angle_x"], transforms["camera_angle_y"]
@@ -257,7 +271,9 @@ args = parser.parse_args()
 #### OPTION2: convert dnerf data to dynamic3dgaussians format
 inp_folder = args.inp_folder
 #out_folder = "data/KTH_shorts_1_0_dnerf"
-out_folder = inp_folder + "_dnerf"
+if inp_folder[-1] == "/":
+    inp_folder = inp_folder[:-1]
+out_folder = inp_folder + "_3dgs"
 
 #if out folder exists, destroy it
 if os.path.exists(out_folder):
