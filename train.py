@@ -13,7 +13,7 @@ from external import calc_ssim, calc_psnr, build_rotation, densify, update_param
 import pickle
 import argparse
 
-DATA_DIR="/Dynamic3DGaussians/"
+DATA_DIR="/3dgs/"
 def get_dataset(t, md, seq):
     dataset = []
     for c in range(len(md['fn'][t])):
@@ -40,24 +40,31 @@ def get_batch(todo_dataset, dataset):
 
 
 def initialize_params(seq, md, subsample=-1):
-    init_pt_cld = np.load(f"{DATA_DIR}/data/{seq}/init_pt_cld.npz")
-    if 'data' in init_pt_cld:
-        init_pt_cld = init_pt_cld["data"]
-    else:
-        key = list(init_pt_cld.keys())[0]
-        init_pt_cld = init_pt_cld[key]
-    if subsample > 0:
-        idxs = np.random.choice(len(init_pt_cld), subsample, replace=(len(init_pt_cld) < subsample))
-        print(f"Subsampling {len(init_pt_cld)} points to {subsample}")
-        init_pt_cld = init_pt_cld[idxs]
-    seg = init_pt_cld[:, 6]
+    #init_pt_cld = np.load(f"{DATA_DIR}/data/{seq}/init_pt_cld.npz")
+    #if 'data' in init_pt_cld:
+        #init_pt_cld = init_pt_cld["data"]
+    #else:
+        #key = list(init_pt_cld.keys())[0]
+        #init_pt_cld = init_pt_cld[key]
+    #if subsample > 0:
+        #idxs = np.random.choice(len(init_pt_cld), subsample, replace=(len(init_pt_cld) < subsample))
+        #print(f"Subsampling {len(init_pt_cld)} points to {subsample}")
+        #init_pt_cld = init_pt_cld[idxs]
+    #seg = init_pt_cld[:, 6]
     # max_cams = 50
+    
+    num_pts = 2000 
+    scene_size = 20.0
+    xyz = np.random.random((num_pts, 3)) * scene_size - scene_size / 2
+    shs = np.random.random((num_pts, 3)) / 255.0
+    seg = np.ones(num_pts, dtype=np.float32) 
+
     max_cams = 100
-    sq_dist, _ = o3d_knn(init_pt_cld[:, :3], 3)
+    sq_dist, _ = o3d_knn(xyz, 3)
     mean3_sq_dist = sq_dist.mean(-1).clip(min=0.0000001)
     params = {
-        'means3D': init_pt_cld[:, :3],
-        'rgb_colors': init_pt_cld[:, 3:6],
+        'means3D': xyz,
+        'rgb_colors': shs,
         'seg_colors': np.stack((seg, np.zeros_like(seg), 1 - seg), -1),
         'unnorm_rotations': np.tile([1, 0, 0, 0], (seg.shape[0], 1)),
         'logit_opacities': np.zeros((seg.shape[0], 1)),
@@ -138,7 +145,7 @@ def get_loss(params, curr_data, variables, is_initial_timestep, return_losses=Fa
 
         losses['soft_col_cons'] = l1_loss_v2(params['rgb_colors'], variables["prev_col"])
 
-    loss_weights = {'im': 4.0, 'seg': 3.0, 'rigid': 4.0, 'rot': 4.0, 'iso': 2.0, 'floor': 0, 'bg': 20.0,
+    loss_weights = {'im': 4.0, 'seg': 0.0, 'rigid': 4.0, 'rot': 4.0, 'iso': 2.0, 'floor': 0, 'bg': 0.0,
                     'soft_col_cons': 0.01}
     
     loss = sum([loss_weights[k] * v for k, v in losses.items()])
@@ -278,9 +285,11 @@ if __name__ == "__main__":
     parser.add_argument("--lr_rot", "-lrr", default=0.001, type=float)
     parser.add_argument("--lr_rgb", "-lrc", default=0.0025, type=float)
     args = parser.parse_args()
-    train(args.data, args.exp_name, args)
-    torch.cuda.empty_cache()
+    #train(args.data, args.exp_name, args)
+    #torch.cuda.empty_cache()
 
-    # for sequence in ["basketball", "boxes", "football", "juggle", "softball", "tennis"]:
+    for scene_id in range(1, 7):
+        train(f"final_scenes_bg_3dgs/scene_{scene_id}", exp_name, args)
+        torch.cuda.empty_cache()
     #     train(sequence, exp_name)
     #     torch.cuda.empty_cache()
