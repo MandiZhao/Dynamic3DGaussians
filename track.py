@@ -56,22 +56,24 @@ def compute_influence(inp_pt, opacities, scales, rotations, means3D):
     influence_p = sig_opacity * tosig  
     return influence_p
 
-SCENES = ["towel_0_3","shorts_1_0","shorts_1_1","tshirt_1_0","tshirt_1_1" ]
-for scene in SCENES:
-    exp_name = "exp/KTH"
+scene_ids = np.array(range(1,7))
+for scene_id in scene_ids: 
+    exp_name = f"wafr_scene_{scene_id}"
+    scene = f"wafr/scene_{scene_id}_3dgs"
     traj_frac = 10
-    scene_data, is_fg = load_scene_data(scene+"_dnerf", exp_name)
+    scene_data, is_fg = load_scene_data(scene, exp_name)
     is_fg = torch.ones_like(is_fg,dtype=torch.bool).to(is_fg.device)
     linesets = calculate_trajectories(scene_data, is_fg, traj_frac=traj_frac, traj_length=1)
 
-    load_gt_fname = "data/KTH/"+scene+"/trajectory.npz"
+    #load_gt_fname = "data/KTH/"+scene+"/trajectory.npz"
+    load_gt_fname = os.path.join(DATA_DIR,"output", exp_name,scene,"gt.npz")
     first_frame_data = scene_data[0] 
     opacities = first_frame_data['opacities'][::traj_frac]
     scales = first_frame_data['scales'][::traj_frac]
     rotations = first_frame_data['rotations'][::traj_frac]
     means3D = first_frame_data['means3D'][::traj_frac]
     num_pts = 100
-    gt_traj = np.load(load_gt_fname)['pos'] # ~20k points, shape (t, N, 3)
+    gt_traj = np.load(load_gt_fname)['traj'] # ~20k points, shape (t, N, 3)
     #idxs = np.random.choice(gt_traj.shape[1], num_pts, replace=False)
     # use all points
     idxs = np.arange(gt_traj.shape[1])
@@ -133,13 +135,17 @@ for scene in SCENES:
     save_fname = f"track_data/infl/{exp_name}.npz"
     np.savez(save_fname, traj=tracked_traj_influence) # save the tracked trajectory
     save_fname = f"track_data/dist/{exp_name}.npz"
-    output = load_gt_fname.replace("trajectory.npz", "preds.npz")
-    np.savez(output, traj=tracked_traj_dist)
+    #output = load_gt_fname.replace("trajectory.npz", "preds.npz")
+    np.savez(save_fname, traj=tracked_traj_dist)
     shutil.copy(load_gt_fname, f"track_data/dist/gt.npz")
     shutil.copy(load_gt_fname, f"track_data/infl/gt.npz")
     # save the tracked trajectory
 
-    fname = f"tracking_{exp_name}_{scene}.png"  
+    fname = f"tracking_{exp_name}_{scene}.png" 
+    # check if directory in fname or only filename
+    if '/' in fname:
+        os.makedirs(os.path.dirname(fname), exist_ok=True)
+     
     ax_influence.set_title("Highest Influence")
     ax_dist.set_title("Lowest Distance")
     ax_gt.set_title("Ground Truth")

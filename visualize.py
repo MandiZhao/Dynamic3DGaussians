@@ -285,7 +285,8 @@ def render_video(seq, exp, meta_fname="data/corl_1_dense_rgb/val_meta.json", use
     all_renders = []
     n_frames = min(w2cs.shape[0], len(scene_data))
     n_cameras = w2cs.shape[1]
-    cam_idxs = np.random.choice(n_cameras, use_cameras, replace=False)
+    #cam_idxs = np.random.choice(n_cameras, use_cameras, replace=False)
+    cam_idxs = np.array([12])
     for cam in cam_idxs:
         curr_frame = []
         for t in range(n_frames):
@@ -306,7 +307,10 @@ def render_video(seq, exp, meta_fname="data/corl_1_dense_rgb/val_meta.json", use
         video_fname = "train_cameras.mp4"
     else:
         video_fname = "test_cameras.mp4"
-    
+
+    # save 31st frame 
+    Image.fromarray(curr_frame[30]).save(join(run_dir, "frame_30.png"))
+
     video_fname = join(run_dir, video_fname)
     imageio.mimwrite(video_fname, all_renders, fps=fps, quality=8)
     print(f"Saved video to {video_fname}")
